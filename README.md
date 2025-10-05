@@ -4,18 +4,6 @@ MCP skills that work with Decyphertek AI application.
 
 **Standardized MCP servers** following the [official Python SDK](https://github.com/modelcontextprotocol/python-sdk) patterns.
 
-## 📦 Available Servers
-
-All servers in this store follow the **official MCP specification** and use the standard Python SDK patterns.
-
-### ✅ Standardized Servers
-
-- **[web-search](servers/web-search/)** - DuckDuckGo search + web scraping (Official SDK ✓)
-- **nextcloud** - Nextcloud file integration (Coming soon)
-- **google-drive** - Google Drive integration (Coming soon)
-- **google-voice** - Google Voice messaging (Coming soon)
-- **whatsapp** - WhatsApp integration (Coming soon)
-
 ## 🎯 Standardization Benefits
 
 1. **Official SDK Compliance** - Uses `mcp` package types
