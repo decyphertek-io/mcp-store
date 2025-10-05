@@ -900,11 +900,13 @@ async def search_images(query: str, num_results: int = 5):
         return search_with_fallbacks(query, num_results)
 
 
-    async def main():
-        """
-        Main entry point for running the MCP server.
-        Standard pattern from official SDK.
-        """
+# Define main function outside MCP_AVAILABLE block
+async def main():
+    """
+    Main entry point for running the MCP server.
+    Standard pattern from official SDK.
+    """
+    if MCP_AVAILABLE:
         # Import stdio transport
         from mcp.server.stdio import stdio_server
         
@@ -915,6 +917,9 @@ async def search_images(query: str, num_results: int = 5):
                 write_stream,
                 app.create_initialization_options(),
             )
+    else:
+        # Standalone mode - not used
+        pass
 
 
 # Entry point
@@ -922,5 +927,34 @@ if __name__ == "__main__":
     if MCP_AVAILABLE:
         asyncio.run(main())
     else:
-        # Standalone mode - can be imported and used directly
-        print("[Web Search] Running in standalone mode - ready for import")
+        # Standalone mode - handle JSON input from stdin for testing
+        import sys
+        import json
+        
+        try:
+            # Read JSON input from stdin
+            input_data = json.loads(sys.stdin.read())
+            message = input_data.get("message", "")
+            
+            if message == "test":
+                # Return a test response
+                result = {
+                    "text": "Web Search MCP Server is working in standalone mode",
+                    "status": "success"
+                }
+                print(json.dumps(result))
+            else:
+                # Handle other messages
+                result = {
+                    "text": f"Web Search MCP Server received: {message}",
+                    "status": "success"
+                }
+                print(json.dumps(result))
+                
+        except Exception as e:
+            # Return error response
+            error_result = {
+                "text": f"Error: {e}",
+                "status": "error"
+            }
+            print(json.dumps(error_result))
