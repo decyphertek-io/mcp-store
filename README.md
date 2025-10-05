@@ -1,4 +1,6 @@
-# DecypherTek MCP Store
+# DecypherTek AI MCP Store:
+
+MCP skills that work with Decyphertek AI application. 
 
 **Standardized MCP servers** following the [official Python SDK](https://github.com/modelcontextprotocol/python-sdk) patterns.
 
