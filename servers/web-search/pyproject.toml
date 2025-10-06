@@ -19,7 +19,3 @@ httpx = ">=0.27.2"
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
-[tool.poetry.virtualenvs]
-in-project = true
-create = true
-
