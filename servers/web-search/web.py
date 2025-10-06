@@ -1,991 +1,294 @@
-
+#!/usr/bin/env python3
 """
-Web Search MCP Server with Redundant Backup Methods
-Handles YouTube videos, images, GIFs, and regular web content
-Multiple search engines for reliability and rate limit handling
+Web Search MCP Server
+A production-ready MCP server providing web search functionality with multiple fallback methods.
 """
 
 import asyncio
-import os
-try:
-    import requests
-    _requests_available = True
-except Exception:
-    _requests_available = False
-    import urllib.request
-    import urllib.error
-import re
 import json
-from typing import Any, List, Dict, Optional
-from urllib.parse import urlparse, parse_qs, quote_plus
-try:
-    from bs4 import BeautifulSoup
-    _bs4_available = True
-except Exception:
-    _bs4_available = False
+import os
+import sys
+from typing import List, Dict, Any
 
-# Official MCP Python SDK imports (optional for standalone use)
-try:
-    from mcp.server import Server
-    from mcp.types import (
-        Tool,
-        TextContent,
-        ImageContent,
-        EmbeddedResource,
-        CallToolResult,
-        ErrorData,
-    )
-    MCP_AVAILABLE = True
-    # Initialize MCP server
-    app = Server("web-search")
-except ImportError:
-    MCP_AVAILABLE = False
-    
-    # Create dummy classes for standalone mode
-    class CallToolResult:
-        def __init__(self, content=None, isError=False):
-            self.content = content or []
-            self.isError = isError
-    
-    class TextContent:
-        def __init__(self, type="text", text=""):
-            self.type = type
-            self.text = text
-    
-    class ImageContent:
-        def __init__(self, type="image", data=None, mimeType="image/jpeg"):
-            self.type = type
-            self.data = data
-            self.mimeType = mimeType
-
-# Initialize search engines with fallbacks
-try:
-    from duckduckgo_search import DDGS
-    ddgs_available = True
-    ddgs = DDGS()
-except ImportError:
-    ddgs_available = False
-    ddgs = None
-
-# Rate limiting tracking
-search_timestamps = []
-rate_limit = {'max_requests': 15, 'window_seconds': 60}  # More generous limits
-failed_engines = {}  # Track which engines are currently failing
-
-# Debug mode - only enabled for admin commands
+# Debug mode controlled by environment variable
 DEBUG_MODE = os.environ.get("MCP_DEBUG", "").lower() in ("1", "true", "yes")
 
-def debug_print(message: str):
-    """Print debug message only if debug mode is enabled"""
+def debug_print(msg: str):
+    """Print debug messages only when DEBUG_MODE is enabled"""
     if DEBUG_MODE:
-        print(message)
+        print(f"[Web Search Debug] {msg}", flush=True)
+
+# Try to import required libraries
+try:
+    from duckduckgo_search import DDGS
+    DDGS_AVAILABLE = True
+    debug_print("✅ duckduckgo_search imported successfully")
+except ImportError as e:
+    DDGS_AVAILABLE = False
+    debug_print(f"❌ duckduckgo_search import failed: {e}")
+
+try:
+    import requests
+    from bs4 import BeautifulSoup
+    REQUESTS_AVAILABLE = True
+    BS4_AVAILABLE = True
+    debug_print("✅ requests and beautifulsoup4 imported successfully")
+except ImportError as e:
+    REQUESTS_AVAILABLE = False
+    BS4_AVAILABLE = False
+    debug_print(f"❌ requests/bs4 import failed: {e}")
+
+# MCP SDK imports
+try:
+    from mcp.server import Server
+    from mcp.types import Tool, TextContent, CallToolResult
+    from mcp.server.stdio import stdio_server
+    MCP_AVAILABLE = True
+    debug_print("✅ MCP SDK imported successfully")
+except ImportError as e:
+    MCP_AVAILABLE = False
+    debug_print(f"❌ MCP SDK import failed: {e}")
 
 
-def check_rate_limit() -> bool:
-    """Check if we're within rate limits"""
-    import time
-    current_time = time.time()
-    
-    # Remove old timestamps
-    global search_timestamps
-    search_timestamps = [ts for ts in search_timestamps if current_time - ts < rate_limit['window_seconds']]
-    
-    # Check if we're under the limit
-    if len(search_timestamps) >= rate_limit['max_requests']:
-        return False
-    
-    # Add current timestamp
-    search_timestamps.append(current_time)
-    return True
-
-
-def is_engine_failing(engine_name: str) -> bool:
-    """Check if an engine is currently marked as failing"""
-    import time
-    current_time = time.time()
-    
-    if engine_name in failed_engines:
-        # If failure was more than 5 minutes ago, try again
-        if current_time - failed_engines[engine_name] > 300:
-            del failed_engines[engine_name]
-            return False
-        return True
-    return False
-
-
-def mark_engine_failed(engine_name: str):
-    """Mark an engine as currently failing"""
-    import time
-    failed_engines[engine_name] = time.time()
-    debug_print(f"[Engine Status] Marked {engine_name} as failing")
-
-
-def retry_with_delay(engine_name: str, max_retries: int = 2) -> bool:
-    """Check if we should retry a failed engine"""
-    import time
-    import random
-    
-    if engine_name not in failed_engines:
-        return True
-    
-    # Add random delay to avoid thundering herd
-    delay = random.uniform(1, 3)
-    time.sleep(delay)
-    
-    # Check if enough time has passed
-    current_time = time.time()
-    if current_time - failed_engines[engine_name] > 30:  # 30 second cooldown
-        del failed_engines[engine_name]
-        return True
-    
-    return False
-
-
-def search_google_fallback(query: str, num_results: int = 5) -> List[Dict]:
-    """Fallback search using Google (web scraping)"""
-    if not _bs4_available:
-        return []
-    if is_engine_failing("google"):
-        debug_print(f"[Google] Skipping - marked as failing")
+def search_duckduckgo_api(query: str, max_results: int = 5) -> List[Dict[str, str]]:
+    """Search using DuckDuckGo API (primary method)"""
+    if not DDGS_AVAILABLE:
+        debug_print("DuckDuckGo API unavailable (library not installed)")
         return []
     
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
+        debug_print(f"Attempting DuckDuckGo API search for: '{query}'")
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results))
         
-        # Google search URL
-        search_url = f"https://www.google.com/search?q={quote_plus(query)}&num={num_results}"
+        formatted = []
+        for r in results:
+            formatted.append({
+                'title': r.get('title', 'No title'),
+                'url': r.get('href', ''),
+                'snippet': r.get('body', 'No description')
+            })
         
-        if _requests_available:
-            response = requests.get(search_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            content = response.content
-        else:
-            req = urllib.request.Request(search_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=10) as r:
-                content = r.read()
-        
-        soup = BeautifulSoup(content, 'html.parser')
-        results = []
-        
-        # Parse Google search results
-        for result in soup.find_all('div', class_='g')[:num_results]:
-            try:
-                title_elem = result.find('h3')
-                link_elem = result.find('a')
-                snippet_elem = result.find('span', class_='aCOpRe')
-                
-                if title_elem and link_elem:
-                    title = title_elem.get_text()
-                    url = link_elem.get('href', '')
-                    snippet = snippet_elem.get_text() if snippet_elem else ''
-                    
-                    # Clean up Google's URL format
-                    if url.startswith('/url?q='):
-                        url = url.split('/url?q=')[1].split('&')[0]
-                    
-                    results.append({
-                        'title': title,
-                        'url': url,
-                        'snippet': snippet
-                    })
-            except Exception as e:
-                continue
-        
-        return results
-        
+        debug_print(f"✅ DuckDuckGo API returned {len(formatted)} results")
+        return formatted
     except Exception as e:
-        debug_print(f"[Google Fallback] Error: {e}")
-        mark_engine_failed("google")
+        debug_print(f"❌ DuckDuckGo API error: {e}")
         return []
 
 
-def search_bing_fallback(query: str, num_results: int = 5) -> List[Dict]:
-    """Fallback search using Bing (web scraping)"""
-    if not _bs4_available:
-        return []
-    if is_engine_failing("bing"):
-        debug_print(f"[Bing] Skipping - marked as failing")
+def search_duckduckgo_html(query: str, max_results: int = 5) -> List[Dict[str, str]]:
+    """Search using DuckDuckGo HTML scraping (fallback 1)"""
+    if not (REQUESTS_AVAILABLE and BS4_AVAILABLE):
+        debug_print("DuckDuckGo HTML unavailable (requests/bs4 not installed)")
         return []
     
     try:
+        debug_print(f"Attempting DuckDuckGo HTML search for: '{query}'")
+        import urllib.parse
+        url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         
-        # Bing search URL
-        search_url = f"https://www.bing.com/search?q={quote_plus(query)}&count={num_results}"
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
         
-        if _requests_available:
-            response = requests.get(search_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            content = response.content
-        else:
-            req = urllib.request.Request(search_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=10) as r:
-                content = r.read()
-        
-        soup = BeautifulSoup(content, 'html.parser')
+        soup = BeautifulSoup(response.text, 'html.parser')
         results = []
         
-        # Parse Bing search results
-        for result in soup.find_all('li', class_='b_algo')[:num_results]:
-            try:
-                title_elem = result.find('h2')
-                link_elem = title_elem.find('a') if title_elem else None
-                snippet_elem = result.find('p')
-                
-                if title_elem and link_elem:
-                    title = title_elem.get_text()
-                    url = link_elem.get('href', '')
-                    snippet = snippet_elem.get_text() if snippet_elem else ''
-                    
-                    results.append({
-                        'title': title,
-                        'url': url,
-                        'snippet': snippet
-                    })
-            except Exception as e:
-                continue
-        
-        return results
-        
-    except Exception as e:
-        debug_print(f"[Bing Fallback] Error: {e}")
-        mark_engine_failed("bing")
-        return []
-
-
-def search_yandex_fallback(query: str, num_results: int = 5) -> List[Dict]:
-    """Fallback search using Yandex (web scraping)"""
-    if not _bs4_available:
-        return []
-    if is_engine_failing("yandex"):
-        debug_print(f"[Yandex] Skipping - marked as failing")
-        return []
-    
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        # Yandex search URL
-        search_url = f"https://yandex.com/search/?text={quote_plus(query)}&numdoc={num_results}"
-        
-        if _requests_available:
-            response = requests.get(search_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            content = response.content
-        else:
-            req = urllib.request.Request(search_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=10) as r:
-                content = r.read()
-        
-        soup = BeautifulSoup(content, 'html.parser')
-        results = []
-        
-        # Parse Yandex search results
-        for result in soup.find_all('div', class_='serp-item')[:num_results]:
-            try:
-                title_elem = result.find('h2')
-                link_elem = title_elem.find('a') if title_elem else None
-                snippet_elem = result.find('div', class_='text-container')
-                
-                if title_elem and link_elem:
-                    title = title_elem.get_text()
-                    url = link_elem.get('href', '')
-                    snippet = snippet_elem.get_text() if snippet_elem else ''
-                    
-                    results.append({
-                        'title': title,
-                        'url': url,
-                        'snippet': snippet
-                    })
-            except Exception as e:
-                continue
-        
-        return results
-        
-    except Exception as e:
-        debug_print(f"[Yandex Fallback] Error: {e}")
-        mark_engine_failed("yandex")
-        return []
-
-
-def search_duckduckgo_html_fallback(query: str, num_results: int = 5) -> List[Dict]:
-    """Fallback search using DuckDuckGo HTML (web scraping)"""
-    if not _bs4_available:
-        return []
-    if is_engine_failing("duckduckgo_html"):
-        debug_print(f"[DuckDuckGo HTML] Skipping - marked as failing")
-        return []
-    
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        # DuckDuckGo HTML search URL
-        search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
-        
-        if _requests_available:
-            response = requests.get(search_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            content = response.content
-        else:
-            req = urllib.request.Request(search_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=10) as r:
-                content = r.read()
-        
-        soup = BeautifulSoup(content, 'html.parser')
-        results = []
-        
-        # Parse DuckDuckGo HTML results
-        for result in soup.find_all('div', class_='result')[:num_results]:
-            try:
-                title_elem = result.find('a', class_='result__a')
-                snippet_elem = result.find('a', class_='result__snippet')
-                
-                if title_elem:
-                    title = title_elem.get_text()
-                    url = title_elem.get('href', '')
-                    snippet = snippet_elem.get_text() if snippet_elem else ''
-                    
-                    results.append({
-                        'title': title,
-                        'url': url,
-                        'snippet': snippet
-                    })
-            except Exception as e:
-                continue
-        
-        return results
-        
-    except Exception as e:
-        debug_print(f"[DuckDuckGo HTML Fallback] Error: {e}")
-        mark_engine_failed("duckduckgo_html")
-        return []
-
-
-def search_startpage_fallback(query: str, num_results: int = 5) -> List[Dict]:
-    """Fallback search using Startpage (web scraping)"""
-    if not _bs4_available:
-        return []
-    if is_engine_failing("startpage"):
-        debug_print(f"[Startpage] Skipping - marked as failing")
-        return []
-    
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        # Startpage search URL
-        search_url = f"https://www.startpage.com/sp/search?query={quote_plus(query)}"
-        
-        if _requests_available:
-            response = requests.get(search_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            content = response.content
-        else:
-            req = urllib.request.Request(search_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=10) as r:
-                content = r.read()
-        
-        soup = BeautifulSoup(content, 'html.parser')
-        results = []
-        
-        # Parse Startpage results
-        for result in soup.find_all('div', class_='w-gl__result')[:num_results]:
-            try:
-                title_elem = result.find('h3')
-                link_elem = title_elem.find('a') if title_elem else None
-                snippet_elem = result.find('p', class_='w-gl__description')
-                
-                if title_elem and link_elem:
-                    title = title_elem.get_text()
-                    url = link_elem.get('href', '')
-                    snippet = snippet_elem.get_text() if snippet_elem else ''
-                    
-                    results.append({
-                        'title': title,
-                        'url': url,
-                        'snippet': snippet
-                    })
-            except Exception as e:
-                continue
-        
-        return results
-        
-    except Exception as e:
-        debug_print(f"[Startpage Fallback] Error: {e}")
-        mark_engine_failed("startpage")
-        return []
-
-
-def search_youtube_videos(query: str, num_results: int = 3) -> List[Dict]:
-    """Search specifically for YouTube videos using multiple methods"""
-    
-    # Add YouTube-specific terms to the query
-    youtube_query = f"{query} site:youtube.com OR site:youtu.be"
-    
-    debug_print(f"[YouTube Search] Searching for videos: {youtube_query}")
-    
-    # Try DuckDuckGo API first for YouTube videos
-    if ddgs_available and check_rate_limit():
-        try:
-            debug_print(f"[YouTube Search] Method 1: Using DuckDuckGo API for YouTube videos")
-            results = list(ddgs.text(youtube_query, max_results=num_results))
-            if results:
-                debug_print(f"[YouTube Search] ✅ DuckDuckGo API found {len(results)} results")
-                # Convert and filter for YouTube videos
-                youtube_results = []
-                for result in results:
-                    url = result.get('href', '')
-                    if 'youtube.com' in url or 'youtu.be' in url:
-                        youtube_id = extract_youtube_id(url)
-                        if youtube_id:
-                            youtube_results.append({
-                                'title': result.get('title', 'No title'),
-                                'url': url,
-                                'snippet': result.get('body', 'No description'),
-                                'youtube_id': youtube_id,
-                                'embed_url': f"https://www.youtube.com/embed/{youtube_id}"
-                            })
-                
-                if youtube_results:
-                    debug_print(f"[YouTube Search] ✅ Found {len(youtube_results)} YouTube videos")
-                    return youtube_results
-        except Exception as e:
-            debug_print(f"[YouTube Search] DuckDuckGo API error: {e}")
-    
-    # Fallback to general search with YouTube filtering
-    debug_print(f"[YouTube Search] Method 2: Using general search with YouTube filtering")
-    general_results = search_with_fallbacks(youtube_query, num_results * 2)  # Get more results to filter
-    
-    youtube_results = []
-    for result in general_results:
-        url = result.get('url', '')
-        if 'youtube.com' in url or 'youtu.be' in url:
-            youtube_id = extract_youtube_id(url)
-            if youtube_id:
-                youtube_results.append({
-                    'title': result.get('title', 'No title'),
-                    'url': url,
-                    'snippet': result.get('snippet', 'No description'),
-                    'youtube_id': youtube_id,
-                    'embed_url': f"https://www.youtube.com/embed/{youtube_id}"
+        for result in soup.select('.result')[:max_results]:
+            title_elem = result.select_one('.result__title')
+            link_elem = result.select_one('.result__url')
+            snippet_elem = result.select_one('.result__snippet')
+            
+            if title_elem and link_elem:
+                results.append({
+                    'title': title_elem.get_text(strip=True),
+                    'url': f"https:{link_elem.get('href', '')}" if link_elem.get('href', '').startswith('//') else link_elem.get('href', ''),
+                    'snippet': snippet_elem.get_text(strip=True) if snippet_elem else 'No description'
                 })
+        
+        debug_print(f"✅ DuckDuckGo HTML returned {len(results)} results")
+        return results
+    except Exception as e:
+        debug_print(f"❌ DuckDuckGo HTML error: {e}")
+        return []
+
+
+def search_bing_html(query: str, max_results: int = 5) -> List[Dict[str, str]]:
+    """Search using Bing HTML scraping (fallback 2)"""
+    if not (REQUESTS_AVAILABLE and BS4_AVAILABLE):
+        debug_print("Bing HTML unavailable (requests/bs4 not installed)")
+        return []
     
-    if youtube_results:
-        debug_print(f"[YouTube Search] ✅ Found {len(youtube_results)} YouTube videos via fallback")
-        return youtube_results[:num_results]  # Limit to requested number
+    try:
+        debug_print(f"Attempting Bing HTML search for: '{query}'")
+        import urllib.parse
+        url = f"https://www.bing.com/search?q={urllib.parse.quote(query)}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        results = []
+        
+        for result in soup.select('.b_algo')[:max_results]:
+            title_elem = result.select_one('h2 a')
+            snippet_elem = result.select_one('.b_caption p')
+            
+            if title_elem:
+                results.append({
+                    'title': title_elem.get_text(strip=True),
+                    'url': title_elem.get('href', ''),
+                    'snippet': snippet_elem.get_text(strip=True) if snippet_elem else 'No description'
+                })
+        
+        debug_print(f"✅ Bing HTML returned {len(results)} results")
+        return results
+    except Exception as e:
+        debug_print(f"❌ Bing HTML error: {e}")
+        return []
+
+
+def search_with_fallbacks(query: str, max_results: int = 5) -> List[Dict[str, str]]:
+    """
+    Execute web search with multiple fallback methods.
+    Tries methods in order until one succeeds.
+    """
+    debug_print(f"=== Starting web search for: '{query}' ===")
+    debug_print(f"Python: {sys.executable}")
+    debug_print(f"Libraries: DDGS={DDGS_AVAILABLE}, requests={REQUESTS_AVAILABLE}, bs4={BS4_AVAILABLE}")
     
-    debug_print(f"[YouTube Search] ❌ No YouTube videos found for: {query}")
+    # Try each method in order
+    methods = [
+        ("DuckDuckGo API", search_duckduckgo_api),
+        ("DuckDuckGo HTML", search_duckduckgo_html),
+        ("Bing HTML", search_bing_html)
+    ]
+    
+    for method_name, method_func in methods:
+        debug_print(f"Trying {method_name}...")
+        results = method_func(query, max_results)
+        if results:
+            debug_print(f"✅ {method_name} succeeded with {len(results)} results")
+            return results
+    
+    debug_print("❌ All search methods failed")
     return []
 
 
-def search_ecosia_fallback(query: str, num_results: int = 5) -> List[Dict]:
-    """Fallback search using Ecosia (web scraping)"""
-    if not _bs4_available:
-        return []
-    if is_engine_failing("ecosia"):
-        debug_print(f"[Ecosia] Skipping - marked as failing")
-        return []
+def format_results(results: List[Dict[str, str]]) -> str:
+    """Format search results as clean text"""
+    if not results:
+        return "No results found. All search methods failed. This may be due to:\n" \
+               "- Missing dependencies (duckduckgo-search, requests, beautifulsoup4)\n" \
+               "- Network connectivity issues\n" \
+               "- Rate limiting from search engines"
     
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        # Ecosia search URL
-        search_url = f"https://www.ecosia.org/search?q={quote_plus(query)}"
-        
-        response = requests.get(search_url, headers=headers, timeout=10)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
-        results = []
-        
-        # Parse Ecosia results
-        for result in soup.find_all('div', class_='result')[:num_results]:
-            try:
-                title_elem = result.find('h2')
-                link_elem = title_elem.find('a') if title_elem else None
-                snippet_elem = result.find('p', class_='result-snippet')
-                
-                if title_elem and link_elem:
-                    title = title_elem.get_text()
-                    url = link_elem.get('href', '')
-                    snippet = snippet_elem.get_text() if snippet_elem else ''
-                    
-                    results.append({
-                        'title': title,
-                        'url': url,
-                        'snippet': snippet
-                    })
-            except Exception as e:
-                continue
-        
-        return results
-        
-    except Exception as e:
-        debug_print(f"[Ecosia Fallback] Error: {e}")
-        mark_engine_failed("ecosia")
-        return []
-
-
-def search_with_fallbacks(query: str, num_results: int = 5) -> List[Dict]:
-    """Search with simple, working fallback methods"""
+    lines = []
+    for i, result in enumerate(results, 1):
+        lines.append(f"{i}. **{result['title']}**")
+        lines.append(f"   {result['snippet']}")
+        lines.append(f"   {result['url']}\n")
     
-    # Method 1: Try DuckDuckGo search (primary method)
-    if ddgs_available:
-        try:
-            results = list(ddgs.text(query, max_results=num_results))
-            if results:
-                # Convert DuckDuckGo format to standard format
-                formatted_results = []
-                for result in results:
-                    formatted_results.append({
-                        'title': result.get('title', 'No title'),
-                        'url': result.get('href', ''),
-                        'snippet': result.get('body', 'No description')
-                    })
-                return formatted_results
-        except Exception as e:
-            debug_print(f"[DuckDuckGo] Error: {e}")
-    
-    # Method 2: Simple Bing fallback (if requests available)
-    if _requests_available:
-        try:
-            import urllib.parse
-            url = "https://www.bing.com/search?q=" + urllib.parse.quote(query)
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                # Simple fallback - return a basic result
-                return [{
-                    'title': f'Search results for: {query}',
-                    'url': url,
-                    'snippet': f'Found results on Bing for "{query}". Click to view full results.'
-                }]
-        except Exception as e:
-            debug_print(f"[Bing Fallback] Error: {e}")
-    
-    # If all methods fail, return helpful message
-    return [{
-        'title': 'Search Temporarily Unavailable',
-        'url': '',
-        'snippet': f'Search engines are currently unavailable for query: "{query}". Please try again in a moment.'
-    }]
+    return "\n".join(lines)
 
 
-def extract_youtube_id(url: str) -> str | None:
-    """Extract YouTube video ID from various URL formats"""
-    patterns = [
-        r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)',
-        r'youtube\.com\/shorts\/([^&\n?#]+)',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
-    return None
+# ============================================================================
+# MCP Server Implementation
+# ============================================================================
 
-
-def is_image_url(url: str) -> bool:
-    """Check if URL points to an image"""
-    image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg')
-    return url.lower().endswith(image_extensions)
-
-
-def is_video_url(url: str) -> bool:
-    """Check if URL points to a video"""
-    video_extensions = ('.mp4', '.webm', '.ogg', '.mov', '.avi')
-    return url.lower().endswith(video_extensions)
-
-
-# MCP Server functions (only if MCP is available)
 if MCP_AVAILABLE:
+    app = Server("web-search")
+    
     @app.list_tools()
     async def list_tools() -> list[Tool]:
-        """
-        List available tools following MCP specification.
-        
-        Returns:
-            List of Tool objects with proper schema
-        """
+        """List available tools"""
         return [
             Tool(
-                name="search",
-                description="Search the web using DuckDuckGo. Returns text results with multimedia content (YouTube videos, images, GIFs)",
+                name="web_search",
+                description="Search the web for information using DuckDuckGo and other search engines",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Search query"
+                            "description": "The search query"
                         },
-                        "num_results": {
+                        "max_results": {
                             "type": "integer",
-                            "description": "Number of results to return (default: 5)",
+                            "description": "Maximum number of results to return (default: 5)",
                             "default": 5
                         }
                     },
                     "required": ["query"]
                 }
-            ),
-            Tool(
-                name="search_videos",
-                description="Search specifically for YouTube videos",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Video search query"
-                        },
-                        "num_results": {
-                            "type": "integer",
-                            "description": "Number of videos to return (default: 3)",
-                            "default": 3
-                        }
-                    },
-                    "required": ["query"]
-                }
-            ),
-            Tool(
-                name="search_images",
-                description="Search for images and GIFs",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Image search query"
-                        },
-                        "num_results": {
-                            "type": "integer",
-                            "description": "Number of images to return (default: 5)",
-                            "default": 5
-                        }
-                    },
-                    "required": ["query"]
-                }
-            ),
+            )
         ]
-
-
-# MCP Server functions (only if MCP is available)
-if MCP_AVAILABLE:
+    
     @app.call_tool()
-    async def call_tool(name: str, arguments: Any) -> CallToolResult:
-        """
-        Execute tool calls following MCP specification.
-        
-        Args:
-            name: Tool name to execute
-            arguments: Tool arguments as dict
-            
-        Returns:
-            CallToolResult with content or error
-        """
-        try:
-            if name == "search":
-                return await handle_search(arguments)
-            elif name == "search_videos":
-                return await handle_video_search(arguments)
-            elif name == "search_images":
-                return await handle_image_search(arguments)
-            else:
-                return CallToolResult(
-                    content=[
-                        TextContent(
-                            type="text",
-                            text=f"Unknown tool: {name}",
-                        )
-                    ],
-                    isError=True,
-                )
-        except Exception as e:
+    async def call_tool(name: str, arguments: dict) -> CallToolResult:
+        """Handle tool calls"""
+        if name != "web_search":
             return CallToolResult(
-                content=[
-                    TextContent(
-                        type="text",
-                        text=f"Error: {str(e)}",
-                    )
-                ],
-                isError=True,
+                content=[TextContent(type="text", text=f"Unknown tool: {name}")],
+                isError=True
             )
-
-
-async def handle_search(arguments: dict) -> CallToolResult:
-    """
-    Handle general web search with multimedia detection and fallback methods.
-    
-    Args:
-        arguments: Dict with 'query' and optional 'num_results'
         
-    Returns:
-        CallToolResult with search results including multimedia
-    """
-    query = arguments.get("query", "")
-    num_results = arguments.get("num_results", 5)
-    
-    # Use fallback search system
-    results = search_with_fallbacks(query, num_results)
-    
-    content_items = []
-    multimedia_found = []
-    
-    for i, result in enumerate(results, 1):
-        url = result.get("href", "")
-        title = result.get("title", "No title")
-        snippet = result.get("body", "No description")
+        query = arguments.get("query", "")
+        max_results = arguments.get("max_results", 5)
         
-        # Check for YouTube videos
-        youtube_id = extract_youtube_id(url)
-        if youtube_id:
-            multimedia_found.append({
-                "type": "youtube",
-                "id": youtube_id,
-                "title": title,
-                "url": url
-            })
-        
-        # Check for images
-        elif is_image_url(url):
-            multimedia_found.append({
-                "type": "image",
-                "url": url,
-                "title": title
-            })
-        
-        # Check for videos
-        elif is_video_url(url):
-            multimedia_found.append({
-                "type": "video",
-                "url": url,
-                "title": title
-            })
-        
-        # Add text result
-        content_items.append(
-            TextContent(
-                type="text",
-                text=f"{i}. {title}\n{snippet}\n{url}\n"
+        if not query:
+            return CallToolResult(
+                content=[TextContent(type="text", text="Error: query parameter is required")],
+                isError=True
             )
-        )
-    
-    # Add multimedia summary at the beginning
-    if multimedia_found:
-        multimedia_text = "\n🎬 MULTIMEDIA CONTENT FOUND:\n"
-        for item in multimedia_found:
-            if item["type"] == "youtube":
-                multimedia_text += f"▶️ YouTube: {item['title']}\n   ID: {item['id']}\n   URL: {item['url']}\n"
-            elif item["type"] == "image":
-                multimedia_text += f"🖼️ Image: {item['title']}\n   URL: {item['url']}\n"
-            elif item["type"] == "video":
-                multimedia_text += f"🎥 Video: {item['title']}\n   URL: {item['url']}\n"
         
-        content_items.insert(0, TextContent(type="text", text=multimedia_text))
-    
-    return CallToolResult(content=content_items)
-
-
-async def handle_video_search(arguments: dict) -> CallToolResult:
-    """
-    Handle YouTube video search.
-    
-    Args:
-        arguments: Dict with 'query' and optional 'num_results'
+        # Perform search
+        results = search_with_fallbacks(query, max_results)
+        formatted = format_results(results)
         
-    Returns:
-        CallToolResult with video results
-    """
-    query = arguments.get("query", "")
-    num_results = arguments.get("num_results", 3)
-    
-    # Use dedicated YouTube search function
-    results = search_youtube_videos(query, num_results)
-    
-    content_items = []
-    
-    if results:
-        text = "🎬 YOUTUBE VIDEOS FOUND:\n\n"
-        for i, video in enumerate(results, 1):
-            text += f"{i}. **{video['title']}**\n"
-            text += f"   📺 {video['url']}\n"
-            text += f"   📝 {video['snippet']}\n"
-            text += f"   🎥 Video ID: {video['youtube_id']}\n\n"
-        
-        content_items.append(TextContent(type="text", text=text))
-    else:
-        content_items.append(TextContent(type="text", text="No YouTube videos found."))
-    
-    return CallToolResult(content=content_items)
-
-
-async def handle_image_search(arguments: dict) -> CallToolResult:
-    """
-    Handle image search.
-    
-    Args:
-        arguments: Dict with 'query' and optional 'num_results'
-        
-    Returns:
-        CallToolResult with image results
-    """
-    query = arguments.get("query", "")
-    num_results = arguments.get("num_results", 5)
-    
-    try:
-        # Try DuckDuckGo images first, fallback to general search
-        if ddgs_available and check_rate_limit():
-            try:
-                results = list(ddgs.images(query, max_results=num_results))
-            except Exception as e:
-                print(f"[DuckDuckGo Images] Error: {e}")
-                results = []
-        else:
-            results = []
-        
-        # If no image results, try general search with image filter
-        if not results:
-            image_query = f"{query} filetype:jpg OR filetype:png OR filetype:gif"
-            results = search_with_fallbacks(image_query, num_results)
-        
-        content_items = []
-        images_found = []
-        
-        for result in results:
-            image_url = result.get("image", "")
-            title = result.get("title", "No title")
-            
-            if image_url:
-                images_found.append({
-                    "url": image_url,
-                    "title": title
-                })
-        
-        if images_found:
-            text = "🖼️ IMAGES FOUND:\n\n"
-            for i, img in enumerate(images_found, 1):
-                text += f"{i}. {img['title']}\n"
-                text += f"   URL: {img['url']}\n\n"
-            
-            content_items.append(TextContent(type="text", text=text))
-        else:
-            content_items.append(TextContent(type="text", text="No images found."))
-        
-        return CallToolResult(content=content_items)
-        
-    except Exception as e:
         return CallToolResult(
-            content=[
-                TextContent(
-                    type="text",
-                    text=f"Image search error: {str(e)}",
-                )
-            ],
-            isError=True,
+            content=[TextContent(type="text", text=formatted)],
+            isError=False
         )
 
 
-# Module-level functions for direct import (Chaquopy compatibility)
-async def search(query: str, num_results: int = 5):
-    """
-    Direct search function for Chaquopy
-    Can be called without spawning server process
-    """
-    if MCP_AVAILABLE:
-        return await call_tool("search", {"query": query, "num_results": num_results})
-    else:
-        # Standalone mode - call search_with_fallbacks directly
-        return search_with_fallbacks(query, num_results)
+# ============================================================================
+# Entry Point
+# ============================================================================
 
-
-async def search_videos(query: str, num_results: int = 3):
-    """
-    Direct video search function for Chaquopy
-    Can be called without spawning server process
-    """
-    if MCP_AVAILABLE:
-        return await call_tool("search_videos", {"query": query, "num_results": num_results})
-    else:
-        # Standalone mode - call YouTube search directly
-        return search_youtube_videos(query, num_results)
-
-
-async def search_images(query: str, num_results: int = 5):
-    """
-    Direct image search function for Chaquopy
-    Can be called without spawning server process
-    """
-    if MCP_AVAILABLE:
-        return await call_tool("search_images", {"query": query, "num_results": num_results})
-    else:
-        # Standalone mode - call search_with_fallbacks directly
-        return search_with_fallbacks(query, num_results)
-
-
-# Define main function outside MCP_AVAILABLE block
 async def main():
-    """
-    Main entry point for running the MCP server.
-    Standard pattern from official SDK.
-    """
-    if MCP_AVAILABLE:
-        # Import stdio transport
-        from mcp.server.stdio import stdio_server
-        
-        # Run server with stdio transport
-        async with stdio_server() as (read_stream, write_stream):
-            await app.run(
-                read_stream,
-                write_stream,
-                app.create_initialization_options(),
-            )
-    else:
-        # Standalone mode - not used
-        pass
+    """Main entry point for MCP server"""
+    if not MCP_AVAILABLE:
+        print(json.dumps({
+            "error": "MCP SDK not available",
+            "details": "Install with: pip install mcp"
+        }))
+        return
+    
+    async with stdio_server() as (read_stream, write_stream):
+        await app.run(read_stream, write_stream, app.create_initialization_options())
 
 
-# Entry point
 if __name__ == "__main__":
     if MCP_AVAILABLE:
+        # Run as MCP server
         asyncio.run(main())
     else:
-        # Standalone mode - handle JSON input from stdin for testing
-        import sys
-        import json
-        
+        # Standalone mode - read JSON from stdin
         try:
-            # Read JSON input from stdin
             input_data = json.loads(sys.stdin.read())
-            message = input_data.get("message", "")
-            num_results = input_data.get("num_results", 5)
-
-            # Perform real search in standalone mode
-            results = search_with_fallbacks(message, num_results)
-            if isinstance(results, dict):
-                output_text = results.get("text", str(results))
-            else:
-                lines = []
-                for i, r in enumerate(results, 1):
-                    title = r.get("title") or r.get("body") or "No title"
-                    url = r.get("url") or r.get("href") or ""
-                    snippet = r.get("snippet") or r.get("body") or ""
-                    lines.append(f"{i}. {title}\n{snippet}\n{url}")
-                output_text = "\n\n".join(lines) if lines else "No results found"
-
-            print(json.dumps({"text": output_text, "status": "success"}))
-                
+            query = input_data.get("message", "")
+            max_results = input_data.get("max_results", 5)
+            
+            results = search_with_fallbacks(query, max_results)
+            formatted = format_results(results)
+            
+            print(json.dumps({"text": formatted, "status": "success"}))
         except Exception as e:
-            # Return error response
-            error_result = {
-                "text": f"Error: {e}",
-                "status": "error"
-            }
-            print(json.dumps(error_result))
+            print(json.dumps({"text": f"Error: {e}", "status": "error"}))
+

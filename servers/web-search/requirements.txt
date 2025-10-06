@@ -1,15 +1,13 @@
-# Official MCP Python SDK
+# MCP SDK
 mcp>=1.6.0
 
-# Search engines (primary and fallbacks)
+# Search engines
 duckduckgo-search>=8.1.1
 
-# Web scraping for fallback search methods
+# Web scraping
 requests>=2.32.3
 beautifulsoup4>=4.12.3
+lxml>=5.0.0
+
+# HTTP client (alternative)
 httpx>=0.27.2
-lxml>=4.9.3
-
-# Additional utilities
-urllib3>=2.2.2
-
