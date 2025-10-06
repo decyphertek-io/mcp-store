@@ -41,7 +41,7 @@
       "id": "rag",
       "repo_url": "https://github.com/decyphertek-io/mcp-store",
       "folder_path": "servers/rag/",
-      "enable_by_default": false
+      "enable_by_default": true
     }
   }
 }
