@@ -119,6 +119,125 @@ class RAGServer:
                 "message": f"Error processing document: {str(e)}"
             }
     
+    def read_document(self, filename: str) -> Dict[str, Any]:
+        """Read a specific document from storage"""
+        try:
+            # Load documents metadata
+            docs_metadata_file = self.storage_dir / "documents.json"
+            if not docs_metadata_file.exists():
+                return {
+                    "success": False,
+                    "error": "No documents found",
+                    "message": "No documents have been uploaded yet"
+                }
+            
+            documents = json.loads(docs_metadata_file.read_text(encoding="utf-8"))
+            
+            # Find document by original filename
+            found_doc = None
+            for stored_filename, doc_info in documents.items():
+                if doc_info.get("original_filename") == filename:
+                    found_doc = doc_info
+                    break
+            
+            if not found_doc:
+                return {
+                    "success": False,
+                    "error": "Document not found",
+                    "message": f"Document '{filename}' not found in storage"
+                }
+            
+            # Read document content
+            file_path = Path(found_doc["file_path"])
+            if not file_path.exists():
+                return {
+                    "success": False,
+                    "error": "File not found",
+                    "message": f"Document file not found at {file_path}"
+                }
+            
+            content = file_path.read_text(encoding="utf-8")
+            
+            return {
+                "success": True,
+                "filename": filename,
+                "content": content,
+                "size": len(content),
+                "uploaded_at": found_doc.get("uploaded_at"),
+                "source": found_doc.get("source", "unknown")
+            }
+            
+        except Exception as e:
+            print(f"[RAG] Error reading document {filename}: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Error reading document: {str(e)}"
+            }
+    
+    def search_documents(self, query: str) -> Dict[str, Any]:
+        """Search through stored documents by content"""
+        try:
+            # Load documents metadata
+            docs_metadata_file = self.storage_dir / "documents.json"
+            if not docs_metadata_file.exists():
+                return {
+                    "success": False,
+                    "error": "No documents found",
+                    "message": "No documents have been uploaded yet"
+                }
+            
+            documents = json.loads(docs_metadata_file.read_text(encoding="utf-8"))
+            
+            results = []
+            query_lower = query.lower()
+            
+            # Search through all documents
+            for stored_filename, doc_info in documents.items():
+                try:
+                    file_path = Path(doc_info["file_path"])
+                    if file_path.exists():
+                        content = file_path.read_text(encoding="utf-8")
+                        
+                        # Simple text search
+                        if query_lower in content.lower():
+                            # Find context around the match
+                            content_lower = content.lower()
+                            match_index = content_lower.find(query_lower)
+                            
+                            # Get context (100 chars before and after)
+                            start = max(0, match_index - 100)
+                            end = min(len(content), match_index + len(query) + 100)
+                            context = content[start:end]
+                            
+                            results.append({
+                                "filename": doc_info["original_filename"],
+                                "stored_filename": stored_filename,
+                                "context": context,
+                                "match_position": match_index,
+                                "size": len(content),
+                                "uploaded_at": doc_info.get("uploaded_at")
+                            })
+                            
+                except Exception as e:
+                    print(f"[RAG] Error reading document {doc_info.get('original_filename', stored_filename)}: {e}")
+                    continue
+            
+            return {
+                "success": True,
+                "query": query,
+                "results": results,
+                "total_matches": len(results)
+            }
+            
+        except Exception as e:
+            print(f"[RAG] Error searching documents: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Error searching documents: {str(e)}"
+            }
+    
     async def query_documents(self, query: str, n_results: int = 3) -> Dict[str, Any]:
         """Query documents in the RAG database"""
         try:
@@ -261,6 +380,34 @@ if MCP_AVAILABLE:
                 }
             ),
             Tool(
+                name="read_document",
+                description="Read a specific document from storage",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "filename": {
+                            "type": "string",
+                            "description": "Document filename to read"
+                        }
+                    },
+                    "required": ["filename"]
+                }
+            ),
+            Tool(
+                name="search_documents",
+                description="Search through stored documents by content",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query to find in document content"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            ),
+            Tool(
                 name="delete_document",
                 description="Delete a document from the RAG database",
                 inputSchema={
@@ -313,6 +460,22 @@ if MCP_AVAILABLE:
                     content=[TextContent(type="text", text=json.dumps(result, indent=2))]
                 )
             
+            elif name == "read_document":
+                result = rag_server.read_document(
+                    filename=arguments.get("filename", "")
+                )
+                return CallToolResult(
+                    content=[TextContent(type="text", text=json.dumps(result, indent=2))]
+                )
+            
+            elif name == "search_documents":
+                result = rag_server.search_documents(
+                    query=arguments.get("query", "")
+                )
+                return CallToolResult(
+                    content=[TextContent(type="text", text=json.dumps(result, indent=2))]
+                )
+            
             else:
                 return CallToolResult(
                     content=[TextContent(type="text", text=f"Unknown tool: {name}")],
@@ -341,6 +504,14 @@ def list_documents() -> Dict[str, Any]:
 def delete_document(doc_id: str) -> Dict[str, Any]:
     """Delete a document from the RAG database"""
     return rag_server.delete_document(doc_id)
+
+def read_document(filename: str) -> Dict[str, Any]:
+    """Read a specific document from storage"""
+    return rag_server.read_document(filename)
+
+def search_documents(query: str) -> Dict[str, Any]:
+    """Search through stored documents by content"""
+    return rag_server.search_documents(query)
 
 async def main():
     """Main function for MCP server"""
