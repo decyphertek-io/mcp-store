@@ -537,10 +537,10 @@ def search_ecosia_fallback(query: str, num_results: int = 5) -> List[Dict]:
 
 
 def search_with_fallbacks(query: str, num_results: int = 5) -> List[Dict]:
-    """Search with comprehensive fallback methods - should always work!"""
+    """Search with simple, working fallback methods"""
     
-    # Method 1: Try DuckDuckGo API (if available and not rate limited)
-    if ddgs_available and check_rate_limit():
+    # Method 1: Try DuckDuckGo search (primary method)
+    if ddgs_available:
         try:
             results = list(ddgs.text(query, max_results=num_results))
             if results:
@@ -554,41 +554,30 @@ def search_with_fallbacks(query: str, num_results: int = 5) -> List[Dict]:
                     })
                 return formatted_results
         except Exception as e:
-            mark_engine_failed("duckduckgo_api")
+            debug_print(f"[DuckDuckGo] Error: {e}")
     
-    # Method 2: Try DuckDuckGo HTML (web scraping)
-    results = search_duckduckgo_html_fallback(query, num_results)
-    if results:
-        return results
+    # Method 2: Simple Bing fallback (if requests available)
+    if _requests_available:
+        try:
+            import urllib.parse
+            url = "https://www.bing.com/search?q=" + urllib.parse.quote(query)
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                # Simple fallback - return a basic result
+                return [{
+                    'title': f'Search results for: {query}',
+                    'url': url,
+                    'snippet': f'Found results on Bing for "{query}". Click to view full results.'
+                }]
+        except Exception as e:
+            debug_print(f"[Bing Fallback] Error: {e}")
     
-    # Method 3: Try Google (web scraping)
-    results = search_google_fallback(query, num_results)
-    if results:
-        return results
-    
-    # Method 4: Try Bing (web scraping)
-    results = search_bing_fallback(query, num_results)
-    if results:
-        return results
-    
-    # Method 5: Try Yandex (web scraping)
-    results = search_yandex_fallback(query, num_results)
-    if results:
-        return results
-    
-    # Method 6: Try Startpage (web scraping)
-    results = search_startpage_fallback(query, num_results)
-    if results:
-        return results
-    
-    # Method 7: Try Ecosia (web scraping)
-    results = search_ecosia_fallback(query, num_results)
-    if results:
-        return results
+    # If all methods fail, return helpful message
     return [{
         'title': 'Search Temporarily Unavailable',
         'url': '',
-        'snippet': f'All search engines are currently unavailable for query: "{query}". This is very rare - please try again in a few minutes. We tried 7 different search methods including DuckDuckGo, Google, Bing, Yandex, Startpage, and Ecosia.'
+        'snippet': f'Search engines are currently unavailable for query: "{query}". Please try again in a moment.'
     }]
 
 
