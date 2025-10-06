@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+decyphertek-io#!/usr/bin/env python3
 """
 RAG MCP Server for DecypherTek AI
 Provides document management and retrieval capabilities
