@@ -6,12 +6,23 @@ Multiple search engines for reliability and rate limit handling
 """
 
 import asyncio
-import requests
+import os
+try:
+    import requests
+    _requests_available = True
+except Exception:
+    _requests_available = False
+    import urllib.request
+    import urllib.error
 import re
 import json
 from typing import Any, List, Dict, Optional
 from urllib.parse import urlparse, parse_qs, quote_plus
-from bs4 import BeautifulSoup
+try:
+    from bs4 import BeautifulSoup
+    _bs4_available = True
+except Exception:
+    _bs4_available = False
 
 # Official MCP Python SDK imports (optional for standalone use)
 try:
@@ -29,7 +40,6 @@ try:
     app = Server("web-search")
 except ImportError:
     MCP_AVAILABLE = False
-    print("[Web Search] MCP server not available - running in standalone mode")
     
     # Create dummy classes for standalone mode
     class CallToolResult:
@@ -62,6 +72,14 @@ search_timestamps = []
 rate_limit = {'max_requests': 15, 'window_seconds': 60}  # More generous limits
 failed_engines = {}  # Track which engines are currently failing
 
+# Debug mode - only enabled for admin commands
+DEBUG_MODE = os.environ.get("MCP_DEBUG", "").lower() in ("1", "true", "yes")
+
+def debug_print(message: str):
+    """Print debug message only if debug mode is enabled"""
+    if DEBUG_MODE:
+        print(message)
+
 
 def check_rate_limit() -> bool:
     """Check if we're within rate limits"""
@@ -74,7 +92,6 @@ def check_rate_limit() -> bool:
     
     # Check if we're under the limit
     if len(search_timestamps) >= rate_limit['max_requests']:
-        print(f"[Rate Limit] Hit limit: {len(search_timestamps)} requests in {rate_limit['window_seconds']}s")
         return False
     
     # Add current timestamp
@@ -100,7 +117,7 @@ def mark_engine_failed(engine_name: str):
     """Mark an engine as currently failing"""
     import time
     failed_engines[engine_name] = time.time()
-    print(f"[Engine Status] Marked {engine_name} as failing")
+    debug_print(f"[Engine Status] Marked {engine_name} as failing")
 
 
 def retry_with_delay(engine_name: str, max_retries: int = 2) -> bool:
@@ -126,8 +143,10 @@ def retry_with_delay(engine_name: str, max_retries: int = 2) -> bool:
 
 def search_google_fallback(query: str, num_results: int = 5) -> List[Dict]:
     """Fallback search using Google (web scraping)"""
+    if not _bs4_available:
+        return []
     if is_engine_failing("google"):
-        print(f"[Google] Skipping - marked as failing")
+        debug_print(f"[Google] Skipping - marked as failing")
         return []
     
     try:
@@ -138,10 +157,16 @@ def search_google_fallback(query: str, num_results: int = 5) -> List[Dict]:
         # Google search URL
         search_url = f"https://www.google.com/search?q={quote_plus(query)}&num={num_results}"
         
-        response = requests.get(search_url, headers=headers, timeout=10)
-        response.raise_for_status()
+        if _requests_available:
+            response = requests.get(search_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            content = response.content
+        else:
+            req = urllib.request.Request(search_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                content = r.read()
         
-        soup = BeautifulSoup(response.content, 'html.parser')
+        soup = BeautifulSoup(content, 'html.parser')
         results = []
         
         # Parse Google search results
@@ -171,15 +196,17 @@ def search_google_fallback(query: str, num_results: int = 5) -> List[Dict]:
         return results
         
     except Exception as e:
-        print(f"[Google Fallback] Error: {e}")
+        debug_print(f"[Google Fallback] Error: {e}")
         mark_engine_failed("google")
         return []
 
 
 def search_bing_fallback(query: str, num_results: int = 5) -> List[Dict]:
     """Fallback search using Bing (web scraping)"""
+    if not _bs4_available:
+        return []
     if is_engine_failing("bing"):
-        print(f"[Bing] Skipping - marked as failing")
+        debug_print(f"[Bing] Skipping - marked as failing")
         return []
     
     try:
@@ -190,10 +217,16 @@ def search_bing_fallback(query: str, num_results: int = 5) -> List[Dict]:
         # Bing search URL
         search_url = f"https://www.bing.com/search?q={quote_plus(query)}&count={num_results}"
         
-        response = requests.get(search_url, headers=headers, timeout=10)
-        response.raise_for_status()
+        if _requests_available:
+            response = requests.get(search_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            content = response.content
+        else:
+            req = urllib.request.Request(search_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                content = r.read()
         
-        soup = BeautifulSoup(response.content, 'html.parser')
+        soup = BeautifulSoup(content, 'html.parser')
         results = []
         
         # Parse Bing search results
@@ -219,15 +252,17 @@ def search_bing_fallback(query: str, num_results: int = 5) -> List[Dict]:
         return results
         
     except Exception as e:
-        print(f"[Bing Fallback] Error: {e}")
+        debug_print(f"[Bing Fallback] Error: {e}")
         mark_engine_failed("bing")
         return []
 
 
 def search_yandex_fallback(query: str, num_results: int = 5) -> List[Dict]:
     """Fallback search using Yandex (web scraping)"""
+    if not _bs4_available:
+        return []
     if is_engine_failing("yandex"):
-        print(f"[Yandex] Skipping - marked as failing")
+        debug_print(f"[Yandex] Skipping - marked as failing")
         return []
     
     try:
@@ -238,10 +273,16 @@ def search_yandex_fallback(query: str, num_results: int = 5) -> List[Dict]:
         # Yandex search URL
         search_url = f"https://yandex.com/search/?text={quote_plus(query)}&numdoc={num_results}"
         
-        response = requests.get(search_url, headers=headers, timeout=10)
-        response.raise_for_status()
+        if _requests_available:
+            response = requests.get(search_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            content = response.content
+        else:
+            req = urllib.request.Request(search_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                content = r.read()
         
-        soup = BeautifulSoup(response.content, 'html.parser')
+        soup = BeautifulSoup(content, 'html.parser')
         results = []
         
         # Parse Yandex search results
@@ -267,15 +308,17 @@ def search_yandex_fallback(query: str, num_results: int = 5) -> List[Dict]:
         return results
         
     except Exception as e:
-        print(f"[Yandex Fallback] Error: {e}")
+        debug_print(f"[Yandex Fallback] Error: {e}")
         mark_engine_failed("yandex")
         return []
 
 
 def search_duckduckgo_html_fallback(query: str, num_results: int = 5) -> List[Dict]:
     """Fallback search using DuckDuckGo HTML (web scraping)"""
+    if not _bs4_available:
+        return []
     if is_engine_failing("duckduckgo_html"):
-        print(f"[DuckDuckGo HTML] Skipping - marked as failing")
+        debug_print(f"[DuckDuckGo HTML] Skipping - marked as failing")
         return []
     
     try:
@@ -286,10 +329,16 @@ def search_duckduckgo_html_fallback(query: str, num_results: int = 5) -> List[Di
         # DuckDuckGo HTML search URL
         search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
         
-        response = requests.get(search_url, headers=headers, timeout=10)
-        response.raise_for_status()
+        if _requests_available:
+            response = requests.get(search_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            content = response.content
+        else:
+            req = urllib.request.Request(search_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                content = r.read()
         
-        soup = BeautifulSoup(response.content, 'html.parser')
+        soup = BeautifulSoup(content, 'html.parser')
         results = []
         
         # Parse DuckDuckGo HTML results
@@ -314,15 +363,17 @@ def search_duckduckgo_html_fallback(query: str, num_results: int = 5) -> List[Di
         return results
         
     except Exception as e:
-        print(f"[DuckDuckGo HTML Fallback] Error: {e}")
+        debug_print(f"[DuckDuckGo HTML Fallback] Error: {e}")
         mark_engine_failed("duckduckgo_html")
         return []
 
 
 def search_startpage_fallback(query: str, num_results: int = 5) -> List[Dict]:
     """Fallback search using Startpage (web scraping)"""
+    if not _bs4_available:
+        return []
     if is_engine_failing("startpage"):
-        print(f"[Startpage] Skipping - marked as failing")
+        debug_print(f"[Startpage] Skipping - marked as failing")
         return []
     
     try:
@@ -333,10 +384,16 @@ def search_startpage_fallback(query: str, num_results: int = 5) -> List[Dict]:
         # Startpage search URL
         search_url = f"https://www.startpage.com/sp/search?query={quote_plus(query)}"
         
-        response = requests.get(search_url, headers=headers, timeout=10)
-        response.raise_for_status()
+        if _requests_available:
+            response = requests.get(search_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            content = response.content
+        else:
+            req = urllib.request.Request(search_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                content = r.read()
         
-        soup = BeautifulSoup(response.content, 'html.parser')
+        soup = BeautifulSoup(content, 'html.parser')
         results = []
         
         # Parse Startpage results
@@ -362,7 +419,7 @@ def search_startpage_fallback(query: str, num_results: int = 5) -> List[Dict]:
         return results
         
     except Exception as e:
-        print(f"[Startpage Fallback] Error: {e}")
+        debug_print(f"[Startpage Fallback] Error: {e}")
         mark_engine_failed("startpage")
         return []
 
@@ -373,15 +430,15 @@ def search_youtube_videos(query: str, num_results: int = 3) -> List[Dict]:
     # Add YouTube-specific terms to the query
     youtube_query = f"{query} site:youtube.com OR site:youtu.be"
     
-    print(f"[YouTube Search] Searching for videos: {youtube_query}")
+    debug_print(f"[YouTube Search] Searching for videos: {youtube_query}")
     
     # Try DuckDuckGo API first for YouTube videos
     if ddgs_available and check_rate_limit():
         try:
-            print(f"[YouTube Search] Method 1: Using DuckDuckGo API for YouTube videos")
+            debug_print(f"[YouTube Search] Method 1: Using DuckDuckGo API for YouTube videos")
             results = list(ddgs.text(youtube_query, max_results=num_results))
             if results:
-                print(f"[YouTube Search] ✅ DuckDuckGo API found {len(results)} results")
+                debug_print(f"[YouTube Search] ✅ DuckDuckGo API found {len(results)} results")
                 # Convert and filter for YouTube videos
                 youtube_results = []
                 for result in results:
@@ -398,13 +455,13 @@ def search_youtube_videos(query: str, num_results: int = 3) -> List[Dict]:
                             })
                 
                 if youtube_results:
-                    print(f"[YouTube Search] ✅ Found {len(youtube_results)} YouTube videos")
+                    debug_print(f"[YouTube Search] ✅ Found {len(youtube_results)} YouTube videos")
                     return youtube_results
         except Exception as e:
-            print(f"[YouTube Search] DuckDuckGo API error: {e}")
+            debug_print(f"[YouTube Search] DuckDuckGo API error: {e}")
     
     # Fallback to general search with YouTube filtering
-    print(f"[YouTube Search] Method 2: Using general search with YouTube filtering")
+    debug_print(f"[YouTube Search] Method 2: Using general search with YouTube filtering")
     general_results = search_with_fallbacks(youtube_query, num_results * 2)  # Get more results to filter
     
     youtube_results = []
@@ -422,17 +479,19 @@ def search_youtube_videos(query: str, num_results: int = 3) -> List[Dict]:
                 })
     
     if youtube_results:
-        print(f"[YouTube Search] ✅ Found {len(youtube_results)} YouTube videos via fallback")
+        debug_print(f"[YouTube Search] ✅ Found {len(youtube_results)} YouTube videos via fallback")
         return youtube_results[:num_results]  # Limit to requested number
     
-    print(f"[YouTube Search] ❌ No YouTube videos found for: {query}")
+    debug_print(f"[YouTube Search] ❌ No YouTube videos found for: {query}")
     return []
 
 
 def search_ecosia_fallback(query: str, num_results: int = 5) -> List[Dict]:
     """Fallback search using Ecosia (web scraping)"""
+    if not _bs4_available:
+        return []
     if is_engine_failing("ecosia"):
-        print(f"[Ecosia] Skipping - marked as failing")
+        debug_print(f"[Ecosia] Skipping - marked as failing")
         return []
     
     try:
@@ -472,7 +531,7 @@ def search_ecosia_fallback(query: str, num_results: int = 5) -> List[Dict]:
         return results
         
     except Exception as e:
-        print(f"[Ecosia Fallback] Error: {e}")
+        debug_print(f"[Ecosia Fallback] Error: {e}")
         mark_engine_failed("ecosia")
         return []
 
@@ -483,10 +542,8 @@ def search_with_fallbacks(query: str, num_results: int = 5) -> List[Dict]:
     # Method 1: Try DuckDuckGo API (if available and not rate limited)
     if ddgs_available and check_rate_limit():
         try:
-            print(f"[Web Search] Method 1: Using DuckDuckGo API for: {query}")
             results = list(ddgs.text(query, max_results=num_results))
             if results:
-                print(f"[Web Search] ✅ DuckDuckGo API succeeded with {len(results)} results")
                 # Convert DuckDuckGo format to standard format
                 formatted_results = []
                 for result in results:
@@ -497,53 +554,42 @@ def search_with_fallbacks(query: str, num_results: int = 5) -> List[Dict]:
                     })
                 return formatted_results
         except Exception as e:
-            print(f"[DuckDuckGo API] Error: {e}")
             mark_engine_failed("duckduckgo_api")
     
+    # Method 1.5: Try simple DuckDuckGo search (no external dependencies)
+    results = simple_duckduckgo_search(query, num_results)
+    if results:
+        return results
+    
     # Method 2: Try DuckDuckGo HTML (web scraping)
-    print(f"[Web Search] Method 2: Trying DuckDuckGo HTML for: {query}")
     results = search_duckduckgo_html_fallback(query, num_results)
     if results:
-        print(f"[Web Search] ✅ DuckDuckGo HTML succeeded with {len(results)} results")
         return results
     
     # Method 3: Try Google (web scraping)
-    print(f"[Web Search] Method 3: Trying Google for: {query}")
     results = search_google_fallback(query, num_results)
     if results:
-        print(f"[Web Search] ✅ Google succeeded with {len(results)} results")
         return results
     
     # Method 4: Try Bing (web scraping)
-    print(f"[Web Search] Method 4: Trying Bing for: {query}")
     results = search_bing_fallback(query, num_results)
     if results:
-        print(f"[Web Search] ✅ Bing succeeded with {len(results)} results")
         return results
     
     # Method 5: Try Yandex (web scraping)
-    print(f"[Web Search] Method 5: Trying Yandex for: {query}")
     results = search_yandex_fallback(query, num_results)
     if results:
-        print(f"[Web Search] ✅ Yandex succeeded with {len(results)} results")
         return results
     
     # Method 6: Try Startpage (web scraping)
-    print(f"[Web Search] Method 6: Trying Startpage for: {query}")
     results = search_startpage_fallback(query, num_results)
     if results:
-        print(f"[Web Search] ✅ Startpage succeeded with {len(results)} results")
         return results
     
     # Method 7: Try Ecosia (web scraping)
-    print(f"[Web Search] Method 7: Trying Ecosia for: {query}")
     results = search_ecosia_fallback(query, num_results)
     if results:
-        print(f"[Web Search] ✅ Ecosia succeeded with {len(results)} results")
         return results
-    
-    # Method 8: All methods failed - return helpful error
-    print(f"[Web Search] ❌ All 7 search methods failed for: {query}")
     return [{
         'title': 'Search Temporarily Unavailable',
         'url': '',
@@ -935,21 +981,22 @@ if __name__ == "__main__":
             # Read JSON input from stdin
             input_data = json.loads(sys.stdin.read())
             message = input_data.get("message", "")
-            
-            if message == "test":
-                # Return a test response
-                result = {
-                    "text": "Web Search MCP Server is working in standalone mode",
-                    "status": "success"
-                }
-                print(json.dumps(result))
+            num_results = input_data.get("num_results", 5)
+
+            # Perform real search in standalone mode
+            results = search_with_fallbacks(message, num_results)
+            if isinstance(results, dict):
+                output_text = results.get("text", str(results))
             else:
-                # Handle other messages
-                result = {
-                    "text": f"Web Search MCP Server received: {message}",
-                    "status": "success"
-                }
-                print(json.dumps(result))
+                lines = []
+                for i, r in enumerate(results, 1):
+                    title = r.get("title") or r.get("body") or "No title"
+                    url = r.get("url") or r.get("href") or ""
+                    snippet = r.get("snippet") or r.get("body") or ""
+                    lines.append(f"{i}. {title}\n{snippet}\n{url}")
+                output_text = "\n\n".join(lines) if lines else "No results found"
+
+            print(json.dumps({"text": output_text, "status": "success"}))
                 
         except Exception as e:
             # Return error response
