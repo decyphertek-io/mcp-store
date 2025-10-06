@@ -2,7 +2,7 @@
 mcp>=1.6.0
 
 # Search engines (primary and fallbacks)
-duckduckgo-search>=6.2.10
+duckduckgo-search>=8.1.1
 
 # Web scraping for fallback search methods
 requests>=2.32.3
