@@ -785,13 +785,13 @@ if MCP_AVAILABLE:
             )
 
 # Standalone functions for direct import
-async def add_document(content: str, filename: str, source: str = "rag_server") -> Dict[str, Any]:
+def add_document(content: str, filename: str, source: str = "rag_server") -> Dict[str, Any]:
     """Add a document to the RAG database"""
-    return await rag_server.add_document(content, filename, source)
+    return rag_server.add_document(content, filename, source)
 
-async def query_documents(query: str, n_results: int = 3) -> Dict[str, Any]:
+def query_documents(query: str, n_results: int = 3) -> Dict[str, Any]:
     """Query documents in the RAG database"""
-    return await rag_server.query_documents(query, n_results)
+    return rag_server.query_documents(query, n_results)
 
 def list_documents() -> Dict[str, Any]:
     """List all documents in the RAG database"""
