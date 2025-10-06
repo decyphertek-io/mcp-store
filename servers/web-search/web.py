@@ -556,11 +556,6 @@ def search_with_fallbacks(query: str, num_results: int = 5) -> List[Dict]:
         except Exception as e:
             mark_engine_failed("duckduckgo_api")
     
-    # Method 1.5: Try simple DuckDuckGo search (no external dependencies)
-    results = simple_duckduckgo_search(query, num_results)
-    if results:
-        return results
-    
     # Method 2: Try DuckDuckGo HTML (web scraping)
     results = search_duckduckgo_html_fallback(query, num_results)
     if results:
