@@ -281,16 +281,50 @@ if __name__ == "__main__":
         # Run as MCP server
         asyncio.run(main())
     else:
-        # Standalone mode - read JSON from stdin
+        # Standalone mode - read JSON from stdin or command line
         try:
-            input_data = json.loads(sys.stdin.read())
+            input_data = None
+            
+            # First try command line arguments
+            if len(sys.argv) > 1:
+                try:
+                    input_data = json.loads(sys.argv[1])
+                    debug_print("Using command line argument input")
+                except json.JSONDecodeError:
+                    pass
+            
+            # If no command line args or invalid JSON, try stdin
+            if input_data is None:
+                try:
+                    # Check if stdin is available
+                    if hasattr(sys.stdin, 'read') and not sys.stdin.closed:
+                        stdin_content = sys.stdin.read()
+                        if stdin_content.strip():
+                            input_data = json.loads(stdin_content)
+                            debug_print("Using stdin input")
+                except (json.JSONDecodeError, OSError, ValueError) as e:
+                    debug_print(f"Stdin read failed: {e}")
+            
+            # Fallback to default if nothing worked
+            if input_data is None:
+                input_data = {"message": "weather in New York", "max_results": 5}
+                debug_print("Using default test query")
+            
             query = input_data.get("message", "")
             max_results = input_data.get("max_results", 5)
+            
+            debug_print(f"Standalone mode: searching for '{query}' with {max_results} results")
             
             results = search_with_fallbacks(query, max_results)
             formatted = format_results(results)
             
-            print(json.dumps({"text": formatted, "status": "success"}))
+            response = {"text": formatted, "status": "success"}
+            print(json.dumps(response))
+            
+        except json.JSONDecodeError as e:
+            error_response = {"text": f"JSON decode error: {e}", "status": "error"}
+            print(json.dumps(error_response))
         except Exception as e:
-            print(json.dumps({"text": f"Error: {e}", "status": "error"}))
+            error_response = {"text": f"Error: {e}", "status": "error"}
+            print(json.dumps(error_response))
 
