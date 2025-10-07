@@ -29,7 +29,7 @@ except ImportError as e:
 
 try:
     import requests
-    from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup
     REQUESTS_AVAILABLE = True
     BS4_AVAILABLE = True
     debug_print("✅ requests and beautifulsoup4 imported successfully")
@@ -100,9 +100,9 @@ def search_duckduckgo_html(query: str, max_results: int = 5) -> List[Dict[str, s
             title_elem = result.select_one('.result__title')
             link_elem = result.select_one('.result__url')
             snippet_elem = result.select_one('.result__snippet')
-            
-            if title_elem and link_elem:
-                results.append({
+                
+                if title_elem and link_elem:
+                    results.append({
                     'title': title_elem.get_text(strip=True),
                     'url': f"https:{link_elem.get('href', '')}" if link_elem.get('href', '').startswith('//') else link_elem.get('href', ''),
                     'snippet': snippet_elem.get_text(strip=True) if snippet_elem else 'No description'
@@ -138,9 +138,9 @@ def search_bing_html(query: str, max_results: int = 5) -> List[Dict[str, str]]:
         for result in soup.select('.b_algo')[:max_results]:
             title_elem = result.select_one('h2 a')
             snippet_elem = result.select_one('.b_caption p')
-            
-            if title_elem:
-                results.append({
+                
+                if title_elem:
+                    results.append({
                     'title': title_elem.get_text(strip=True),
                     'url': title_elem.get('href', ''),
                     'snippet': snippet_elem.get_text(strip=True) if snippet_elem else 'No description'
@@ -172,7 +172,7 @@ def search_with_fallbacks(query: str, max_results: int = 5) -> List[Dict[str, st
     for method_name, method_func in methods:
         debug_print(f"Trying {method_name}...")
         results = method_func(query, max_results)
-        if results:
+            if results:
             debug_print(f"✅ {method_name} succeeded with {len(results)} results")
             return results
     
@@ -238,7 +238,7 @@ if MCP_AVAILABLE:
                 isError=True
             )
         
-        query = arguments.get("query", "")
+    query = arguments.get("query", "")
         max_results = arguments.get("max_results", 5)
         
         if not query:
@@ -261,7 +261,7 @@ if MCP_AVAILABLE:
 # Entry Point
 # ============================================================================
 
-async def main():
+    async def main():
     """Main entry point for MCP server"""
     if not MCP_AVAILABLE:
         print(json.dumps({
@@ -270,7 +270,7 @@ async def main():
         }))
         return
     
-    async with stdio_server() as (read_stream, write_stream):
+        async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())
 
 
