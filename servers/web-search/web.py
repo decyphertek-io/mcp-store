@@ -29,7 +29,7 @@ except ImportError as e:
 
 try:
     import requests
-from bs4 import BeautifulSoup
+    from bs4 import BeautifulSoup
     REQUESTS_AVAILABLE = True
     BS4_AVAILABLE = True
     debug_print("✅ requests and beautifulsoup4 imported successfully")
