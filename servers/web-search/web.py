@@ -11,7 +11,7 @@ import sys
 from typing import List, Dict, Any
 
 # Debug mode controlled by environment variable
-DEBUG_MODE = os.environ.get("MCP_DEBUG", "").lower() in ("1", "true", "yes")
+DEBUG_MODE = os.environ.get("MCP_DEBUG", "0").lower() in ("1", "true", "yes")
 
 def debug_print(msg: str):
     """Print debug messages only when DEBUG_MODE is enabled"""
