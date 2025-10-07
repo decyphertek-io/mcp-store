@@ -14,9 +14,9 @@ from typing import List, Dict, Any
 DEBUG_MODE = os.environ.get("MCP_DEBUG", "0").lower() in ("1", "true", "yes")
 
 def debug_print(msg: str):
-    """Print debug messages only when DEBUG_MODE is enabled"""
+    """Print debug messages only when DEBUG_MODE is enabled (to stderr)"""
     if DEBUG_MODE:
-        print(f"[Web Search Debug] {msg}", flush=True)
+        print(f"[Web Search Debug] {msg}", file=sys.stderr, flush=True)
 
 # Try to import required libraries
 try:
@@ -275,7 +275,9 @@ async def main():
 
 
 if __name__ == "__main__":
-    if MCP_AVAILABLE:
+    # Allow forcing standalone mode via env var even if MCP SDK is available
+    force_standalone = os.environ.get("MCP_STANDALONE", "0").lower() in ("1", "true", "yes")
+    if MCP_AVAILABLE and not force_standalone:
         # Run as MCP server
         asyncio.run(main())
     else:
