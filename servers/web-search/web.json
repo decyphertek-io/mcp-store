@@ -5,7 +5,7 @@
   "description": "DuckDuckGo web search and URL content scraping for AI context enhancement",
   "author": "DecypherTek",
   "github_url": "https://github.com/decyphertek/mcp-store/blob/main/servers/web-search",
-  "python_file": "web.py",
+  "python_file": "web.mcp",
   "mobile_compatible": true,
   "category": "search",
   "tags": ["search", "web", "scraping", "duckduckgo", "research"],
