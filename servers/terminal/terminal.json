@@ -1,0 +1,48 @@
+{
+  "name": "terminal",
+  "version": "0.1.0",
+  "description": "Terminal MCP Server - Secure terminal access for ansible, terraform, packer, and other CLI tools",
+  "author": "Your Name",
+  "license": "MIT",
+  "repository": "https://github.com/yourusername/terminal-mcp-server",
+  "homepage": "https://github.com/yourusername/terminal-mcp-server",
+  "mcpServers": {
+    "terminal": {
+      "command": "/path/to/terminal.mcp",
+      "args": [],
+      "disabled": false,
+      "autoApprove": [],
+      "env": {}
+    }
+  },
+  "configuration": {
+    "config_file": "terminal.config",
+    "required_fields": [
+      "allowed_directories"
+    ],
+    "optional_fields": [
+      "default_shell",
+      "max_output_length",
+      "command_timeout"
+    ]
+  },
+  "tools": [
+    {
+      "name": "execute_command",
+      "description": "Execute a shell command in allowed directories"
+    },
+    {
+      "name": "list_directory",
+      "description": "List contents of a directory within allowed directories"
+    },
+    {
+      "name": "read_file",
+      "description": "Read contents of a file within allowed directories"
+    },
+    {
+      "name": "get_working_directory",
+      "description": "Get current working directory and list of allowed directories"
+    }
+  ],
+  "resources": []
+}
